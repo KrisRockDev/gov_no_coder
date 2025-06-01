@@ -1,10 +1,11 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:file_content_aggregator/providers/app_state_providers.dart';
 import 'package:file_content_aggregator/providers/theme_provider.dart';
-import 'package:clipboard/clipboard.dart'; // Для clipboard.copy
+import 'package:clipboard/clipboard.dart';
+import 'package:file_content_aggregator/constants/app_constants.dart';
+
 
 class ActionBar extends ConsumerWidget {
   const ActionBar({super.key});
@@ -17,10 +18,6 @@ class ActionBar extends ConsumerWidget {
       ref.read(selectedPathsProvider.notifier).clear();
       ref.read(expandedNodesProvider.notifier).clear();
       ref.read(filterTextProvider.notifier).state = "";
-      // Очищать ли промпты и контент - по усмотрению. В Python-версии они не очищались при смене папки, если уже были заполнены.
-      // ref.read(startPromptProvider.notifier).state = "";
-      // ref.read(endPromptProvider.notifier).state = "";
-      // ref.read(aggregatedContentProvider.notifier).clearContent();
       await ref.read(fileTreeDataProvider.notifier).loadDirectoryTree(directoryPath);
     }
   }
@@ -40,25 +37,32 @@ class ActionBar extends ConsumerWidget {
   }
 
   void _showContent(WidgetRef ref) {
-    ref.read(aggregatedContentProvider.notifier).aggregateContent();
+    // Эта функция теперь вызывается по Ctrl+Enter из HomeScreen
+    // Здесь можно оставить логику, если кнопка все еще нужна,
+    // но основное действие по горячей клавише - в HomeScreen.
+    // Для консистентности, вызовем тот же метод, что и горячая клавиша.
+    if (ref.read(canShowContentProvider) && !ref.read(aggregatedContentProvider).isLoading) {
+      ref.read(aggregatedContentProvider.notifier).aggregateContent();
+    }
   }
 
   void _refresh(WidgetRef ref) {
-     ref.read(aggregatedContentProvider.notifier).clearContent(); // Очищаем перед обновлением
-     ref.read(fileTreeDataProvider.notifier).refreshTree();
+    ref.read(aggregatedContentProvider.notifier).clearContent();
+    ref.read(fileTreeDataProvider.notifier).refreshTree();
   }
 
   void _copyAll(BuildContext context, WidgetRef ref) {
+    // Эта функция теперь вызывается по Ctrl+Shift+C из HomeScreen
     final startPrompt = ref.read(startPromptProvider);
     final content = ref.read(aggregatedContentProvider).asData?.value ?? "";
     final endPrompt = ref.read(endPromptProvider);
 
     final parts = <String>[
       if (startPrompt.trim().isNotEmpty) startPrompt.trim(),
-      if (content.trim().isNotEmpty) content.trim(),
+      if (content.trim().isNotEmpty) content.trim(), // Используем content как он есть (уже trimRight в сервисе)
       if (endPrompt.trim().isNotEmpty) endPrompt.trim(),
     ];
-    final fullText = parts.join("\n\n");
+    final fullText = parts.join("\n\n").trim(); // Финальный trim для всего текста
 
     if (fullText.isNotEmpty) {
       FlutterClipboard.copy(fullText).then((_) {
@@ -66,22 +70,23 @@ class ActionBar extends ConsumerWidget {
           const SnackBar(content: Text("Текст скопирован в буфер обмена"), duration: Duration(seconds: 2)),
         );
       }).catchError((e) {
-         ScaffoldMessenger.of(context).showSnackBar(
+        ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(content: Text("Ошибка копирования: $e"), backgroundColor: Colors.red),
         );
       });
     } else {
-       ScaffoldMessenger.of(context).showSnackBar(
+      ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text("Нет текста для копирования"), duration: Duration(seconds: 2)),
       );
     }
   }
 
   void _clearAllFields(WidgetRef ref) {
+    // Эта функция теперь вызывается по Ctrl+X из HomeScreen
     ref.read(startPromptProvider.notifier).state = "";
-    ref.read(endPromptProvider.notifier).state = "";
+    ref.read(endPromptProvider.notifier).state = AppConstants.defaultUpdateSystemPrompt;
+    ref.read(filesToUpdateInputProvider.notifier).state = "";
     ref.read(aggregatedContentProvider.notifier).clearContent();
-    // selectedPaths и filterText не очищаются здесь, это отдельные действия
   }
 
   @override
@@ -89,8 +94,8 @@ class ActionBar extends ConsumerWidget {
     final themeMode = ref.watch(themeModeProvider);
     final isLoadingContent = ref.watch(aggregatedContentProvider).isLoading;
     final isLoadingTree = ref.watch(fileTreeDataProvider).isLoading;
+    final isLoadingUpdate = ref.watch(updateFilesStatusProvider).isLoading; // Для кнопки обновления
 
-    // Состояния кнопок
     final canSelectAll = ref.watch(canSelectAllProvider);
     final canDeselectAll = ref.watch(canDeselectAllProvider);
     final canShowContent = ref.watch(canShowContentProvider);
@@ -102,7 +107,6 @@ class ActionBar extends ConsumerWidget {
       padding: const EdgeInsets.symmetric(horizontal: 8.0, vertical: 4.0),
       decoration: BoxDecoration(
         border: Border(bottom: BorderSide(color: Theme.of(context).dividerColor, width: 0.5)),
-        // color: Theme.of(context).colorScheme.surfaceVariant.withOpacity(0.3), // Небольшой фон для панели
       ),
       child: Row(
         children: [
@@ -139,7 +143,7 @@ class ActionBar extends ConsumerWidget {
           ),
           const VerticalDivider(indent: 8, endIndent: 8),
           Tooltip(
-            message: "Показать/Собрать контент [Enter]",
+            message: "Показать/Собрать контент [Ctrl+Enter]",
             child: IconButton(
               icon: const Icon(Icons.visibility),
               onPressed: canShowContent && !isLoadingContent ? () => _showContent(ref) : null,
@@ -153,7 +157,7 @@ class ActionBar extends ConsumerWidget {
             ),
           ),
           Tooltip(
-            message: "Копировать всё [Ctrl+C]",
+            message: "Копировать всё [Ctrl+Shift+C]",
             child: IconButton(
               icon: const Icon(Icons.copy),
               onPressed: canCopy ? () => _copyAll(context, ref) : null,
@@ -166,12 +170,12 @@ class ActionBar extends ConsumerWidget {
               onPressed: canClearAll ? () => _clearAllFields(ref) : null,
             ),
           ),
-          if (isLoadingContent || isLoadingTree)
+          if (isLoadingContent || isLoadingTree || isLoadingUpdate)
             const Padding(
               padding: EdgeInsets.symmetric(horizontal: 8.0),
               child: SizedBox(
-                width: 16, height: 16,
-                child: CircularProgressIndicator(strokeWidth: 2.0)
+                  width: 16, height: 16,
+                  child: CircularProgressIndicator(strokeWidth: 2.0)
               ),
             ),
           const VerticalDivider(indent: 8, endIndent: 8),
@@ -181,8 +185,8 @@ class ActionBar extends ConsumerWidget {
               icon: Icon(themeMode == ThemeMode.dark ? Icons.light_mode : Icons.dark_mode),
               onPressed: () {
                 ref.read(themeModeProvider.notifier).setThemeMode(
-                      themeMode == ThemeMode.dark ? ThemeMode.light : ThemeMode.dark,
-                    );
+                  themeMode == ThemeMode.dark ? ThemeMode.light : ThemeMode.dark,
+                );
               },
             ),
           ),
