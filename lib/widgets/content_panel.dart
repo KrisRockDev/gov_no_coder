@@ -81,7 +81,7 @@ class _ContentPanelState extends ConsumerState<ContentPanel> {
       }
     });
 
-    Widget textField = Stack(
+    Widget textFieldWidget = Stack(
       children: [
         TextField(
           controller: controller,
@@ -141,16 +141,20 @@ class _ContentPanelState extends ConsumerState<ContentPanel> {
       ],
     );
 
+    // Если поле должно растягиваться, оборачиваем его в Expanded.
+    // Иначе, оно будет занимать минимально необходимую высоту в Column.
+    final fieldContainer = expands ? Expanded(child: textFieldWidget) : textFieldWidget;
+
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
-      mainAxisSize: expands ? MainAxisSize.max : MainAxisSize.min, // Если expands, то max
+      mainAxisSize: expands ? MainAxisSize.max : MainAxisSize.min,
       children: [
         if (label != null)
           Padding(
             padding: const EdgeInsets.only(bottom: 4.0, left: 4.0),
             child: Text(label, style: theme.textTheme.labelMedium?.copyWith(color: theme.colorScheme.primary)),
           ),
-        if (expands) Expanded(child: textField) else textField,
+        fieldContainer,
       ],
     );
   }
@@ -188,80 +192,95 @@ class _ContentPanelState extends ConsumerState<ContentPanel> {
     final theme = Theme.of(context);
     final canUpdateFiles = ref.watch(canUpdateProjectFilesProvider);
 
-    // Увеличенные min/max lines для промптов
-    const promptMinLines = 3; // Было 2
-    const promptMaxLines = 5; // Было 3
+    const promptMinLines = 4; // Увеличено (было 3 * 1.5 ~= 4.5)
+    const promptMaxLines = 7; // Увеличено (было 5 * 1.5 ~= 7.5)
 
     return Padding(
       padding: const EdgeInsets.all(8.0),
       child: Column(
         children: [
-          // Начальный и конечный промпты теперь занимают всю ширину, если они видимы
-          // и размещаются над разделенным полем
-          _buildTextFieldWithClear(
-            context: context,
-            label: "Начальный промпт:",
-            hint: "Добавьте текст перед содержимым файлов...",
-            controller: _startPromptController,
-            provider: startPromptProvider,
-            ref: ref,
-            minLines: promptMinLines,
-            maxLines: promptMaxLines,
-            // expands: false, // Не растягиваем эти поля, они фиксированной высоты
-          ),
-          const SizedBox(height: 8),
           Expanded(
             child: Row(
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
+                // Левая колонка: Агрегированный контент и промпты
                 Expanded(
                   child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Padding(
-                        padding: const EdgeInsets.only(bottom: 4.0, left: 4.0),
-                        child: Text("Агрегированный контент:", style: theme.textTheme.labelMedium?.copyWith(color: theme.colorScheme.primary)),
+                      _buildTextFieldWithClear(
+                        context: context,
+                        label: "Начальный промпт:",
+                        hint: "Добавьте текст перед содержимым файлов...",
+                        controller: _startPromptController,
+                        provider: startPromptProvider,
+                        ref: ref,
+                        minLines: promptMinLines,
+                        maxLines: promptMaxLines,
                       ),
+                      const SizedBox(height: 8),
                       Expanded(
-                        child: aggregatedContentAsync.when(
-                          data: (content) {
-                            final contentController = TextEditingController(text: content);
-                            return TextField(
-                              key: ValueKey(content),
-                              controller: contentController,
-                              readOnly: true,
-                              minLines: null,
-                              maxLines: null,
-                              expands: true,
-                              textAlignVertical: TextAlignVertical.top,
-                              decoration: InputDecoration(
-                                hintText: "Содержимое выбранных файлов...",
-                                hintStyle: AppConstants.hintStyle.copyWith(color: theme.hintColor),
-                                border: OutlineInputBorder(
-                                  borderRadius: BorderRadius.circular(8),
-                                  borderSide: BorderSide(color: theme.dividerColor),
+                        child: Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Padding(
+                              padding: const EdgeInsets.only(bottom: 4.0, left: 4.0),
+                              child: Text("Агрегированный контент:", style: theme.textTheme.labelMedium?.copyWith(color: theme.colorScheme.primary)),
+                            ),
+                            Expanded(
+                              child: aggregatedContentAsync.when(
+                                data: (content) {
+                                  final contentController = TextEditingController(text: content);
+                                  return TextField(
+                                    key: ValueKey(content),
+                                    controller: contentController,
+                                    readOnly: true,
+                                    minLines: null,
+                                    maxLines: null,
+                                    expands: true,
+                                    textAlignVertical: TextAlignVertical.top,
+                                    decoration: InputDecoration(
+                                      hintText: "Содержимое выбранных файлов...",
+                                      hintStyle: AppConstants.hintStyle.copyWith(color: theme.hintColor),
+                                      border: OutlineInputBorder(
+                                        borderRadius: BorderRadius.circular(8),
+                                        borderSide: BorderSide(color: theme.dividerColor),
+                                      ),
+                                      enabledBorder: OutlineInputBorder(
+                                        borderRadius: BorderRadius.circular(8),
+                                        borderSide: BorderSide(color: theme.dividerColor.withOpacity(0.7)),
+                                      ),
+                                      fillColor: theme.colorScheme.surfaceVariant.withOpacity(0.2),
+                                      filled: true,
+                                      contentPadding: const EdgeInsets.all(10),
+                                    ),
+                                    style: const TextStyle(fontSize: 13, fontFamily: 'monospace'),
+                                  );
+                                },
+                                loading: () => const Center(child: CircularProgressIndicator()),
+                                error: (error, _) => Center(
+                                  child: Text("Ошибка: $error", style: TextStyle(color: theme.colorScheme.error)),
                                 ),
-                                enabledBorder: OutlineInputBorder(
-                                  borderRadius: BorderRadius.circular(8),
-                                  borderSide: BorderSide(color: theme.dividerColor.withOpacity(0.7)),
-                                ),
-                                fillColor: theme.colorScheme.surfaceVariant.withOpacity(0.2),
-                                filled: true,
-                                contentPadding: const EdgeInsets.all(10),
                               ),
-                              style: const TextStyle(fontSize: 13, fontFamily: 'monospace'),
-                            );
-                          },
-                          loading: () => const Center(child: CircularProgressIndicator()),
-                          error: (error, _) => Center(
-                            child: Text("Ошибка: $error", style: TextStyle(color: theme.colorScheme.error)),
-                          ),
+                            ),
+                          ],
                         ),
+                      ),
+                       const SizedBox(height: 8),
+                      _buildTextFieldWithClear(
+                        context: context,
+                        label: "Завершающий промпт (системный):",
+                        hint: "Инструкции для ИИ по формату обновления файлов...",
+                        controller: _endPromptController,
+                        provider: endPromptProvider,
+                        ref: ref,
+                        minLines: promptMinLines,
+                        maxLines: promptMaxLines,
                       ),
                     ],
                   ),
                 ),
-                const SizedBox(width: 8),
+                const SizedBox(width: 8), // Разделитель между колонками
+                // Правая колонка: Поле для обновления файлов
                 Expanded(
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
@@ -277,9 +296,9 @@ class _ContentPanelState extends ConsumerState<ContentPanel> {
                           controller: _filesToUpdateController,
                           provider: filesToUpdateInputProvider,
                           ref: ref,
-                          minLines: 10,
+                          minLines: 10, // Это поле будет растягиваться
                           maxLines: null,
-                          expands: true,
+                          expands: true,   // Растягиваем это поле
                           fontFamily: 'monospace',
                         ),
                       ),
@@ -306,18 +325,8 @@ class _ContentPanelState extends ConsumerState<ContentPanel> {
               ],
             ),
           ),
-          const SizedBox(height: 8),
-          _buildTextFieldWithClear(
-            context: context,
-            label: "Завершающий промпт (системный):",
-            hint: "Инструкции для ИИ по формату обновления файлов...",
-            controller: _endPromptController,
-            provider: endPromptProvider,
-            ref: ref,
-            minLines: promptMinLines, // Увеличенные строки
-            maxLines: promptMaxLines, // Увеличенные строки
-            // expands: false, // Не растягиваем
-          ),
+          // Убираем промпты снизу, так как они теперь в левой колонке
+          // const SizedBox(height: 8),
         ],
       ),
     );
