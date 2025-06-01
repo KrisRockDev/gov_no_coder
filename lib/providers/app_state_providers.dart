@@ -4,17 +4,14 @@ import 'package:file_content_aggregator/models/file_tree_node.dart';
 import 'package:file_content_aggregator/services/file_system_service.dart';
 import 'package:file_content_aggregator/services/preferences_service.dart';
 import 'package:path/path.dart' as p;
-import 'package:file_content_aggregator/constants/app_constants.dart'; // Для defaultUpdateSystemPrompt
+import 'package:file_content_aggregator/constants/app_constants.dart';
 
-// Сервисы
 final preferencesServiceProvider = Provider((ref) => PreferencesService());
 final fileSystemServiceProvider = Provider((ref) => FileSystemService());
 
-// Основное состояние
 final selectedDirectoryProvider = StateProvider<String?>((ref) => null);
 final filterTextProvider = StateProvider<String>((ref) => "");
 
-// Состояние дерева файлов
 final fileTreeDataProvider = StateNotifierProvider<FileTreeNotifier, AsyncValue<List<FileTreeNode>>>((ref) {
   return FileTreeNotifier(ref);
 });
@@ -60,7 +57,6 @@ class FileTreeNotifier extends StateNotifier<AsyncValue<List<FileTreeNode>>> {
   }
 }
 
-// Выбранные и раскрытые узлы
 final selectedPathsProvider = StateNotifierProvider<SelectedPathsNotifier, Set<String>>((ref) {
   return SelectedPathsNotifier();
 });
@@ -109,10 +105,12 @@ class ExpandedNodesNotifier extends StateNotifier<Set<String>> {
   void clear() => state = {};
 }
 
-// Промпты, результат и поле для обновления файлов
 final startPromptProvider = StateProvider<String>((ref) => "");
-final endPromptProvider = StateProvider<String>((ref) => AppConstants.defaultUpdateSystemPrompt); // <--- Устанавливаем промпт по умолчанию
-final filesToUpdateInputProvider = StateProvider<String>((ref) => ""); // <--- Новое поле
+// Для endPromptProvider, мы больше не устанавливаем defaultUpdateSystemPrompt здесь,
+// так как он теперь будет загружаться из файла prompt_finish.txt (если есть) или останется пустым.
+// Системный промпт для обновления файлов будет браться из AppConstants.defaultUpdateSystemPrompt напрямую при копировании, если поле endPrompt пусто.
+final endPromptProvider = StateProvider<String>((ref) => ""); // Теперь по умолчанию пустой
+final filesToUpdateInputProvider = StateProvider<String>((ref) => "");
 
 final aggregatedContentProvider = StateNotifierProvider<AggregatedContentNotifier, AsyncValue<String>>((ref) {
     return AggregatedContentNotifier(ref);
@@ -125,11 +123,39 @@ class AggregatedContentNotifier extends StateNotifier<AsyncValue<String>> {
     Future<void> aggregateContent() async {
         final selectedDir = _ref.read(selectedDirectoryProvider);
         final selected = _ref.read(selectedPathsProvider);
-        final startPrompt = _ref.read(startPromptProvider);
-        final endPromptVal = _ref.read(endPromptProvider); // Читаем значение, а не сам провайдер
+        
+        String startPromptFromFile = "";
+        String endPromptFromFile = "";
+
+        if (selectedDir != null) {
+            startPromptFromFile = await _ref.read(fileSystemServiceProvider).readPromptFile(selectedDir, AppConstants.startPromptFileName);
+            endPromptFromFile = await _ref.read(fileSystemServiceProvider).readPromptFile(selectedDir, AppConstants.endPromptFileName);
+            
+            // Если файл prompt_start.txt найден и его содержимое не пусто, оно используется
+            // Иначе, если поле было непустым (введено пользователем), оно сохраняется
+            final currentStartPromptInField = _ref.read(startPromptProvider);
+            if (startPromptFromFile.isNotEmpty) {
+                 _ref.read(startPromptProvider.notifier).state = startPromptFromFile;
+            } else if (currentStartPromptInField.isEmpty) {
+                 // Если файл пуст и поле пусто, оставляем поле пустым
+                 _ref.read(startPromptProvider.notifier).state = "";
+            }
+            // То же для конечного промпта, но с учетом, что defaultUpdateSystemPrompt больше не используется как дефолт для этого поля
+            final currentEndPromptInField = _ref.read(endPromptProvider);
+             if (endPromptFromFile.isNotEmpty) {
+                 _ref.read(endPromptProvider.notifier).state = endPromptFromFile;
+            } else if (currentEndPromptInField.isEmpty) {
+                  _ref.read(endPromptProvider.notifier).state = "";
+            } else if (currentEndPromptInField == AppConstants.defaultUpdateSystemPrompt && endPromptFromFile.isEmpty){
+                // Если в поле был системный промпт по умолчанию, а файл пуст, то очищаем поле
+                 _ref.read(endPromptProvider.notifier).state = "";
+            }
+
+        }
+        final currentStartPrompt = _ref.read(startPromptProvider);
 
         if (selectedDir == null || selected.isEmpty) {
-            state = AsyncValue.data( (startPrompt.isEmpty && endPromptVal.isEmpty) ? "Выберите файлы/папки и нажмите 'Собрать контент'." : "Не выбраны файлы для агрегации." );
+            state = AsyncValue.data(currentStartPrompt.isEmpty ? "Выберите файлы/папки и нажмите 'Собрать контент'." : "Не выбраны файлы для агрегации.");
             return;
         }
         state = const AsyncValue.loading();
@@ -137,8 +163,8 @@ class AggregatedContentNotifier extends StateNotifier<AsyncValue<String>> {
             final content = await _ref.read(fileSystemServiceProvider).aggregateFileContents(
                 selected,
                 selectedDir,
-                startPrompt,
-                endPromptVal,
+                currentStartPrompt,
+                "", // Конечный промпт не передаем сюда для агрегации основного контента
             );
             state = AsyncValue.data(content);
         } catch (e, s) {
@@ -148,7 +174,6 @@ class AggregatedContentNotifier extends StateNotifier<AsyncValue<String>> {
     void clearContent() => state = const AsyncValue.data("");
 }
 
-// Провайдер для статуса обновления файлов
 final updateFilesStatusProvider = StateNotifierProvider<UpdateFilesStatusNotifier, AsyncValue<String>>((ref) {
   return UpdateFilesStatusNotifier(ref);
 });
@@ -174,7 +199,6 @@ class UpdateFilesStatusNotifier extends StateNotifier<AsyncValue<String>> {
     try {
       final resultMessage = await _ref.read(fileSystemServiceProvider).updateFilesFromMarkdown(rootDir, updateData);
       state = AsyncValue.data(resultMessage);
-      // После успешного обновления, обновим дерево файлов, чтобы видеть изменения
       await _ref.read(fileTreeDataProvider.notifier).refreshTree();
     } catch (e, s) {
       state = AsyncValue.error("Ошибка обновления файлов: $e", s);
@@ -183,8 +207,6 @@ class UpdateFilesStatusNotifier extends StateNotifier<AsyncValue<String>> {
   void clearStatus() => state = const AsyncValue.data("");
 }
 
-
-// Провайдер для начальной загрузки последней директории
 final initialDirectoryLoaderProvider = FutureProvider<void>((ref) async {
   final prefsService = ref.read(preferencesServiceProvider);
   final lastDir = await prefsService.getLastDirectory();
@@ -193,37 +215,46 @@ final initialDirectoryLoaderProvider = FutureProvider<void>((ref) async {
   }
 });
 
-// Провайдер для отображения имени выбранной директории
 final selectedDirectoryNameProvider = Provider<String>((ref) {
   final path = ref.watch(selectedDirectoryProvider);
-  if (path == null) return "Директория не выбрана";
-  // Более короткое отображение пути
-  String basePath = p.basename(path);
-  String parentPath = p.basename(p.dirname(path));
-  if (parentPath.isEmpty || parentPath == '.' || parentPath == p.separator) return "Выбрано: $basePath";
-  return "Выбрано: ...${p.separator}$parentPath${p.separator}$basePath";
+  if (path == null || path.isEmpty) return "Директория не выбрана"; // Добавлена проверка на пустой путь
+  return path;
 });
 
-// Провайдер для доступности кнопок
 final canSelectAllProvider = Provider<bool>((ref) {
     final treeState = ref.watch(fileTreeDataProvider);
     return treeState.maybeWhen(data: (nodes) => nodes.isNotEmpty, orElse: () => false);
 });
 
 final canDeselectAllProvider = Provider<bool>((ref) => ref.watch(selectedPathsProvider).isNotEmpty);
-final canShowContentProvider = Provider<bool>((ref) => ref.watch(selectedPathsProvider).isNotEmpty && ref.watch(selectedDirectoryProvider) != null);
+final canShowContentProvider = Provider<bool>((ref) {
+  final selectedDir = ref.watch(selectedDirectoryProvider);
+  return ref.watch(selectedPathsProvider).isNotEmpty && selectedDir != null;
+});
 final canRefreshProvider = Provider<bool>((ref) => ref.watch(selectedDirectoryProvider) != null);
 
 final canCopyProvider = Provider<bool>((ref) {
     final aggregatedContent = ref.watch(aggregatedContentProvider);
     final startPrompt = ref.watch(startPromptProvider);
     final endPromptVal = ref.watch(endPromptProvider);
-    return aggregatedContent.maybeWhen(data: (data) => data.isNotEmpty, orElse: () => false) || startPrompt.isNotEmpty || endPromptVal.isNotEmpty;
+    final String actualEndPrompt = endPromptVal.trim().isEmpty ? AppConstants.defaultUpdateSystemPrompt : endPromptVal;
+
+    return aggregatedContent.maybeWhen(data: (data) => data.trim().isNotEmpty, orElse: () => false) ||
+           startPrompt.trim().isNotEmpty ||
+           actualEndPrompt.trim().isNotEmpty; // Проверяем актуальный endPrompt для копирования
 });
 
-final canClearAllPromptsAndContentProvider = Provider<bool>((ref) => ref.watch(canCopyProvider));
+final canClearAllPromptsAndContentProvider = Provider<bool>((ref) {
+    final aggregatedContent = ref.watch(aggregatedContentProvider);
+    final startPrompt = ref.watch(startPromptProvider);
+    final endPromptVal = ref.watch(endPromptProvider);
+    final updateInput = ref.watch(filesToUpdateInputProvider);
+    return aggregatedContent.maybeWhen(data: (data) => data.trim().isNotEmpty, orElse: () => false) ||
+           startPrompt.trim().isNotEmpty ||
+           endPromptVal.trim().isNotEmpty || // Если поле endPrompt не пустое, его можно очистить
+           updateInput.trim().isNotEmpty;
+});
 
-// Провайдер для кнопки обновления файлов проекта
 final canUpdateProjectFilesProvider = Provider<bool>((ref) {
   return ref.watch(filesToUpdateInputProvider).isNotEmpty && ref.watch(selectedDirectoryProvider) != null;
 });

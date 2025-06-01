@@ -9,13 +9,12 @@ import 'package:file_content_aggregator/providers/app_state_providers.dart';
 import 'package:file_picker/file_picker.dart';
 import 'package:clipboard/clipboard.dart';
 
-// --- Intents for Shortcuts ---
 class OpenDirectoryIntent extends Intent {}
 class SelectAllTreeIntent extends Intent {}
 class DeselectAllTreeIntent extends Intent {}
-class ShowContentIntent extends Intent {} // Будет Ctrl+Enter
+class ShowContentIntent extends Intent {}
 class RefreshTreeIntent extends Intent {}
-class CopyAllOutputIntent extends Intent {} // Будет Ctrl+Shift+C
+class CopyAllOutputIntent extends Intent {}
 class ClearAllFieldsIntent extends Intent {}
 class UpdateProjectFilesIntent extends Intent {}
 
@@ -96,12 +95,15 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
     if (ref.read(canCopyProvider)) {
       final startPrompt = ref.read(startPromptProvider);
       final content = ref.read(aggregatedContentProvider).asData?.value ?? "";
-      final endPrompt = ref.read(endPromptProvider);
+      final endPromptValue = ref.read(endPromptProvider);
+      // Используем системный промпт для копирования, если поле endPrompt пустое
+      final String actualEndPrompt = endPromptValue.trim().isEmpty ? AppConstants.defaultUpdateSystemPrompt : endPromptValue;
+
 
       final parts = <String>[
         if (startPrompt.trim().isNotEmpty) startPrompt.trim(),
         if (content.trim().isNotEmpty) content.trim(),
-        if (endPrompt.trim().isNotEmpty) endPrompt.trim(),
+        if (actualEndPrompt.trim().isNotEmpty) actualEndPrompt.trim(),
       ];
       final fullText = parts.join("\n\n");
 
@@ -118,7 +120,7 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
   void _handleClearAllFields() {
     if (ref.read(canClearAllPromptsAndContentProvider)) {
       ref.read(startPromptProvider.notifier).state = "";
-      ref.read(endPromptProvider.notifier).state = AppConstants.defaultUpdateSystemPrompt;
+      ref.read(endPromptProvider.notifier).state = ""; // Очищаем, т.к. defaultUpdateSystemPrompt больше не дефолт для поля
       ref.read(filesToUpdateInputProvider.notifier).state = "";
       ref.read(aggregatedContentProvider.notifier).clearContent();
     }
@@ -165,13 +167,12 @@ class _HomeScreenState extends ConsumerState<HomeScreen> {
       LogicalKeySet(LogicalKeyboardKey.control, LogicalKeyboardKey.keyO): OpenDirectoryIntent(),
       LogicalKeySet(LogicalKeyboardKey.control, LogicalKeyboardKey.keyA): SelectAllTreeIntent(),
       LogicalKeySet(LogicalKeyboardKey.escape): DeselectAllTreeIntent(),
-      // Измененные горячие клавиши
       LogicalKeySet(LogicalKeyboardKey.control, LogicalKeyboardKey.enter): ShowContentIntent(),
       LogicalKeySet(LogicalKeyboardKey.control, LogicalKeyboardKey.numpadEnter): ShowContentIntent(),
       LogicalKeySet(LogicalKeyboardKey.control, LogicalKeyboardKey.shift, LogicalKeyboardKey.keyC): CopyAllOutputIntent(),
-      // Остальные
       LogicalKeySet(LogicalKeyboardKey.control, LogicalKeyboardKey.keyR): RefreshTreeIntent(),
-      LogicalKeySet(LogicalKeyboardKey.control, LogicalKeyboardKey.keyX): ClearAllFieldsIntent(),
+      // Убираем горячую клавишу для ClearAllFieldsIntent
+      // LogicalKeySet(LogicalKeyboardKey.control, LogicalKeyboardKey.shift, LogicalKeyboardKey.keyX): ClearAllFieldsIntent(),
       LogicalKeySet(LogicalKeyboardKey.control, LogicalKeyboardKey.keyU): UpdateProjectFilesIntent(),
     };
 

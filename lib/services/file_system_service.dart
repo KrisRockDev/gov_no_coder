@@ -1,8 +1,44 @@
 import 'dart:io';
+import 'dart:async'; 
+import 'package:flutter/foundation.dart'; 
 import 'package:path/path.dart' as p;
 import 'package:file_content_aggregator/models/file_tree_node.dart';
 import 'package:file_content_aggregator/utils/file_utils.dart';
 import 'package:file_content_aggregator/constants/app_constants.dart';
+
+class _FileReadTask {
+  final String filePath;
+  final String baseDirectoryPath;
+  _FileReadTask(this.filePath, this.baseDirectoryPath);
+}
+
+class _FileReadResult {
+  final String relativePath;
+  final String content;
+  final String? error;
+  final String originalPath;
+
+  _FileReadResult(this.relativePath, this.content, this.error, this.originalPath);
+}
+
+Future<_FileReadResult> _readFileInIsolate(_FileReadTask task) async {
+  try {
+    final file = File(task.filePath);
+    final content = await file.readAsString();
+    String relativePath = p.relative(task.filePath, from: task.baseDirectoryPath);
+    if (Platform.isWindows) {
+      relativePath = relativePath.replaceAll('\\', '/');
+    }
+    return _FileReadResult(relativePath, content.trim(), null, task.filePath);
+  } catch (e) {
+    String relativePath = p.relative(task.filePath, from: task.baseDirectoryPath);
+    if (Platform.isWindows) {
+      relativePath = relativePath.replaceAll('\\', '/');
+    }
+    return _FileReadResult(relativePath, '', e.toString().split('\n').first, task.filePath);
+  }
+}
+
 
 class FileSystemService {
   Future<List<FileTreeNode>> getDirectoryTree(String directoryPath, {String filter = ""}) async {
@@ -12,139 +48,148 @@ class FileSystemService {
     }
 
     List<String> getAllFilesAndDirs(String rootPath) {
-      List<String> paths = [];
-      try {
-        Directory root = Directory(rootPath);
-        if (!root.existsSync()) return paths;
+        List<String> paths = [];
+        try {
+            Directory root = Directory(rootPath);
+            if (!root.existsSync()) return paths;
 
-        root.listSync(recursive: true, followLinks: false).forEach((entity) {
-          final entityName = p.basename(entity.path);
-          bool shouldIgnore = AppConstants.ignoreDirs.contains(entityName.toLowerCase());
+            root.listSync(recursive: true, followLinks: false).forEach((entity) {
+                final entityName = p.basename(entity.path);
+                // Используем AppConstants.ignoreDirsAndFiles
+                bool shouldIgnore = AppConstants.ignoreDirsAndFiles.contains(entityName.toLowerCase());
 
-          List<String> parts = p.split(entity.path);
-          for (int i = 0; i < parts.length -1; i++) {
-            if (parts[i].startsWith('.') && parts[i].length > 1) {
-              if (AppConstants.ignoreDirs.contains(parts[i].toLowerCase())) {
-                shouldIgnore = true;
-                break;
-              }
-              String currentSubPath = p.joinAll(parts.sublist(0, i + 1));
-              if (Directory(currentSubPath).existsSync()) {
-                bool isTextFileInHiddenDir = false;
-                if(entity is File) {
-                  for(var ext in AppConstants.textExtensions){
-                    if(entityName.toLowerCase() == ext || entityName.toLowerCase().endsWith(ext)){
-                      isTextFileInHiddenDir = true;
-                      break;
+                List<String> parts = p.split(entity.path);
+                for (int i = 0; i < parts.length -1; i++) {
+                    if (parts[i].startsWith('.') && parts[i].length > 1) {
+                         // Используем AppConstants.ignoreDirsAndFiles
+                         if (AppConstants.ignoreDirsAndFiles.contains(parts[i].toLowerCase())) {
+                             shouldIgnore = true;
+                             break;
+                         }
+                         String currentSubPath = p.joinAll(parts.sublist(0, i + 1));
+                         if (Directory(currentSubPath).existsSync()) {
+                            bool isTextFileInHiddenDir = false;
+                            if(entity is File) {
+                                for(var ext in AppConstants.textExtensions){
+                                    if(entityName.toLowerCase() == ext || entityName.toLowerCase().endsWith(ext)){
+                                        isTextFileInHiddenDir = true;
+                                        break;
+                                    }
+                                }
+                            }
+                            if(!isTextFileInHiddenDir){
+                                shouldIgnore = true;
+                                break;
+                            }
+                         }
                     }
-                  }
                 }
-                if(!isTextFileInHiddenDir){
-                  shouldIgnore = true;
-                  break;
+                if (!shouldIgnore) {
+                    if (entity is File) {
+                        // Дополнительно проверяем, не является ли файл одним из файлов промптов
+                        if (entityName != AppConstants.startPromptFileName && entityName != AppConstants.endPromptFileName) {
+                           if (FileUtils.isLikelyTextFile(entity.path)) {
+                               paths.add(entity.path);
+                           }
+                        }
+                    } else if (entity is Directory) {
+                        paths.add(entity.path);
+                    }
                 }
-              }
-            }
-          }
-          if (!shouldIgnore) {
-            if (entity is File) {
-              if (FileUtils.isLikelyTextFile(entity.path)) {
-                paths.add(entity.path);
-              }
-            } else if (entity is Directory) {
-              paths.add(entity.path);
-            }
-          }
-        });
-      } catch (e) {
-        // print("Error in getAllFilesAndDirs for $rootPath: $e");
-      }
-      return paths;
+            });
+        } catch (e) {
+            // print("Error in getAllFilesAndDirs for $rootPath: $e");
+        }
+        return paths;
     }
 
     Set<String> getVisiblePaths(String rootPath, String filterText) {
-      final allPaths = getAllFilesAndDirs(rootPath);
-      if (filterText.isEmpty) return Set.from(allPaths);
+        final allPaths = getAllFilesAndDirs(rootPath);
+        if (filterText.isEmpty) return Set.from(allPaths);
 
-      final Set<String> visible = {};
-      final filterLower = filterText.toLowerCase();
+        final Set<String> visible = {};
+        final filterLower = filterText.toLowerCase();
 
-      for (final path in allPaths) {
-        if (p.basename(path).toLowerCase().contains(filterLower)) {
-          visible.add(path);
-          String current = path;
-          while (p.dirname(current) != p.dirname(rootPath) && current != rootPath) {
-            current = p.dirname(current);
-            if (current == rootPath || current == p.dirname(rootPath)) break;
-            if (allPaths.contains(current)) {
-              visible.add(current);
-            } else {
-              String tempParent = current;
-              bool foundValidParent = false;
-              while(p.dirname(tempParent) != p.dirname(rootPath) && tempParent != rootPath) {
-                tempParent = p.dirname(tempParent);
-                if (allPaths.contains(tempParent)) {
-                  visible.add(tempParent);
-                  foundValidParent = true;
-                  break;
+        for (final path in allPaths) {
+            if (p.basename(path).toLowerCase().contains(filterLower)) {
+                visible.add(path);
+                String current = path;
+                while (p.dirname(current) != p.dirname(rootPath) && current != rootPath) {
+                    current = p.dirname(current);
+                    if (current == rootPath || current == p.dirname(rootPath)) break;
+                     if (allPaths.contains(current)) {
+                        visible.add(current);
+                    } else {
+                        String tempParent = current;
+                        bool foundValidParent = false;
+                        while(p.dirname(tempParent) != p.dirname(rootPath) && tempParent != rootPath) {
+                            tempParent = p.dirname(tempParent);
+                             if (allPaths.contains(tempParent)) {
+                                visible.add(tempParent);
+                                foundValidParent = true;
+                                break;
+                            }
+                             if (tempParent == rootPath || tempParent == p.dirname(rootPath)) break;
+                        }
+                        if(foundValidParent) break;
+                    }
                 }
-                if (tempParent == rootPath || tempParent == p.dirname(rootPath)) break;
-              }
-              if(foundValidParent) break;
             }
-          }
         }
-      }
-      if (visible.isNotEmpty && allPaths.contains(rootPath)) {
-        visible.add(rootPath);
-      }
-      return visible;
+        if (visible.isNotEmpty && allPaths.contains(rootPath)) {
+           visible.add(rootPath);
+        }
+        return visible;
     }
 
     final visiblePaths = getVisiblePaths(directoryPath, filter);
 
     List<FileTreeNode> buildFilteredTree(Directory currentDir, Set<String> visible) {
-      List<FileTreeNode> nodes = [];
-      try {
-        final entities = currentDir.listSync(recursive: false, followLinks: false);
-        entities.sort((a, b) {
-          bool aIsDir = a is Directory;
-          bool bIsDir = b is Directory;
-          if (aIsDir && !bIsDir) return -1;
-          if (!aIsDir && bIsDir) return 1;
-          return p.basename(a.path).toLowerCase().compareTo(p.basename(b.path).toLowerCase());
-        });
+        List<FileTreeNode> nodes = [];
+        try {
+            final entities = currentDir.listSync(recursive: false, followLinks: false);
+            entities.sort((a, b) {
+                bool aIsDir = a is Directory;
+                bool bIsDir = b is Directory;
+                if (aIsDir && !bIsDir) return -1;
+                if (!aIsDir && bIsDir) return 1;
+                return p.basename(a.path).toLowerCase().compareTo(p.basename(b.path).toLowerCase());
+            });
 
-        for (var entity in entities) {
-          if (!visible.contains(entity.path)) {
-            continue;
-          }
-          final entityName = p.basename(entity.path);
-          final bool isDir = entity is Directory;
+            for (var entity in entities) {
+                if (!visible.contains(entity.path)) {
+                    continue;
+                }
+                final entityName = p.basename(entity.path);
+                // Явное исключение файлов промптов из дерева
+                if (entityName == AppConstants.startPromptFileName || entityName == AppConstants.endPromptFileName) {
+                    continue;
+                }
+                final bool isDir = entity is Directory;
 
-          if (isDir) {
-            nodes.add(FileTreeNode(
-              path: entity.path,
-              name: entityName,
-              isDirectory: true,
-              children: buildFilteredTree(entity as Directory, visible),
-            ));
-          } else if (entity is File) {
-            nodes.add(FileTreeNode(
-              path: entity.path,
-              name: entityName,
-              isDirectory: false,
-            ));
-          }
+                if (isDir) {
+                    nodes.add(FileTreeNode(
+                        path: entity.path,
+                        name: entityName,
+                        isDirectory: true,
+                        children: buildFilteredTree(entity as Directory, visible),
+                    ));
+                } else if (entity is File) {
+                     nodes.add(FileTreeNode(
+                        path: entity.path,
+                        name: entityName,
+                        isDirectory: false,
+                    ));
+                }
+            }
+        } catch (e) {
+            // print("Error building filtered tree for ${currentDir.path}: $e");
         }
-      } catch (e) {
-        // print("Error building filtered tree for ${currentDir.path}: $e");
-      }
-      return nodes;
+        return nodes;
     }
 
     if (filter.isNotEmpty && visiblePaths.isEmpty) {
-      return [];
+        return [];
     }
     return buildFilteredTree(dir, visiblePaths);
   }
@@ -153,10 +198,10 @@ class FileSystemService {
       Set<String> selectedPaths,
       String baseDirectoryPath,
       String startPrompt,
-      String endPrompt, // Этот параметр больше не используется для формирования основного контента
+      String endPrompt,
       ) async {
     final buffer = StringBuffer();
-    final List<String> sortedPaths = selectedPaths.toList()..sort();
+    final List<String> sortedUniqueFilePathsToRead = [];
     final Set<String> processedFiles = {};
 
     if (startPrompt.trim().isNotEmpty) {
@@ -164,75 +209,92 @@ class FileSystemService {
       buffer.writeln();
     }
 
-    List<File> filesToRead = [];
+    List<String> pathsToScan = selectedPaths.toList()..sort();
 
-    for (final path in sortedPaths) {
+    for (final path in pathsToScan) {
       final entityType = FileSystemEntity.typeSync(path, followLinks: false);
+      final entityName = p.basename(path);
+      if (entityName == AppConstants.startPromptFileName || entityName == AppConstants.endPromptFileName) {
+        continue; // Игнорируем файлы промптов при агрегации
+      }
+
       if (entityType == FileSystemEntityType.file) {
         if (FileUtils.isLikelyTextFile(path) && !processedFiles.contains(path)) {
-          filesToRead.add(File(path));
+          sortedUniqueFilePathsToRead.add(path);
           processedFiles.add(path);
         }
       } else if (entityType == FileSystemEntityType.directory) {
         try {
           final dir = Directory(path);
           final subEntities = dir.listSync(recursive: true, followLinks: false);
-          subEntities.sort((a, b) => a.path.compareTo(b.path));
-
+          
           for (final subEntity in subEntities) {
+            final subEntityName = p.basename(subEntity.path);
+            if (subEntityName == AppConstants.startPromptFileName || subEntityName == AppConstants.endPromptFileName) {
+                continue; // Игнорируем файлы промптов при агрегации
+            }
             if (subEntity is File && FileUtils.isLikelyTextFile(subEntity.path) && !processedFiles.contains(subEntity.path)) {
-              filesToRead.add(subEntity);
-              processedFiles.add(subEntity.path);
+               sortedUniqueFilePathsToRead.add(subEntity.path);
+               processedFiles.add(subEntity.path);
             }
           }
         } catch (e) {
-          String relativePath = p.relative(path, from: baseDirectoryPath);
-          buffer.writeln("$relativePath (ДИРЕКТОРИЯ)");
-          buffer.writeln("```");
-          buffer.writeln("[ОШИБКА ДОСТУПА: Не удалось прочитать содержимое папки]");
-          buffer.writeln("```");
-          buffer.writeln();
+          //
         }
       }
     }
+    
+    sortedUniqueFilePathsToRead.sort(); 
 
-    filesToRead.sort((a,b) => a.path.compareTo(b.path));
+    final List<_FileReadTask> tasks = sortedUniqueFilePathsToRead
+        .map((filePath) => _FileReadTask(filePath, baseDirectoryPath))
+        .toList();
 
-    for (final file in filesToRead) {
-      try {
-        String relativePath = p.relative(file.path, from: baseDirectoryPath);
-        if (Platform.isWindows) {
-          relativePath = relativePath.replaceAll('\\', '/');
-        }
-        buffer.writeln(relativePath);
+    final List<_FileReadResult> results = await Future.wait(
+      tasks.map((task) => compute(_readFileInIsolate, task)).toList()
+    );
+    
+    results.sort((a, b) => a.originalPath.compareTo(b.originalPath));
+
+    for (final result in results) {
+      if (result.error != null) {
+        buffer.writeln(result.relativePath);
         buffer.writeln("```");
-        final content = await file.readAsString();
-        buffer.writeln(content.trim());
+        buffer.writeln("[НЕ УДАЛОСЬ ПРОЧИТАТЬ ФАЙЛ: ${result.error}]");
         buffer.writeln("```");
         buffer.writeln();
-      } catch (e) {
-        String relativePath = p.relative(file.path, from: baseDirectoryPath);
-        if (Platform.isWindows) {
-          relativePath = relativePath.replaceAll('\\', '/');
-        }
-        buffer.writeln(relativePath);
+      } else {
+        buffer.writeln(result.relativePath);
         buffer.writeln("```");
-        buffer.writeln("[НЕ УДАЛОСЬ ПРОЧИТАТЬ ФАЙЛ: ${e.toString().split('\n').first}]");
+        buffer.writeln(result.content);
         buffer.writeln("```");
         buffer.writeln();
       }
     }
+    
+    String aggregatedResult = buffer.toString().trimRight();
 
-    String result = buffer.toString().trimRight();
-
-    if (result.isEmpty && selectedPaths.isNotEmpty && startPrompt.trim().isEmpty) {
-      return "Не найдено текстовых файлов в выбранных элементах (или они были отфильтрованы/недоступны).";
+    if (aggregatedResult.isEmpty && selectedPaths.isNotEmpty && startPrompt.trim().isEmpty) {
+        return "Не найдено текстовых файлов в выбранных элементах (или они были отфильтрованы/недоступны).";
     }
-    if (result.isEmpty && startPrompt.trim().isEmpty) {
-      return "Выберите файлы/папки и нажмите 'Собрать контент'.";
+    if (aggregatedResult.isEmpty && startPrompt.trim().isEmpty) {
+        return "Выберите файлы/папки и нажмите 'Собрать контент'.";
     }
 
-    return result;
+    return aggregatedResult;
+  }
+  
+  Future<String> readPromptFile(String projectRootPath, String fileName) async {
+    try {
+      final filePath = p.join(projectRootPath, fileName);
+      final file = File(filePath);
+      if (await file.exists()) {
+        return await file.readAsString();
+      }
+    } catch (e) {
+      // print("Error reading prompt file $fileName: $e");
+    }
+    return "";
   }
 
   Future<String> updateFilesFromMarkdown(String projectRootPath, String markdownData) async {
@@ -251,19 +313,18 @@ class FileSystemService {
     int successfulUpdates = 0;
     int failedUpdates = 0;
     List<String> errorMessages = [];
-    String currentFilePathRelativeForError = ""; // Для более точного сообщения об ошибке
+    String currentFilePathRelativeForError = ""; 
 
     bool mainPatternMatched = false;
     Iterator<RegExpMatch>? matchIterator = matches.isNotEmpty ? matches.iterator : null;
 
     if (matchIterator != null && matchIterator.moveNext()) {
       mainPatternMatched = true;
-      // Сбрасываем итератор для прохода по всем совпадениям
-      matches = blockPattern.allMatches(normalizedData); // Переполучаем, т.к. итератор был использован
+      matches = blockPattern.allMatches(normalizedData); 
       for (final match in matches) {
         String filePathRelative = match.group(1)!.trim();
-        currentFilePathRelativeForError = filePathRelative; // Сохраняем для возможной ошибки
-        String fileContent = match.group(2)!;
+        currentFilePathRelativeForError = filePathRelative; 
+        String fileContent = match.group(2)!; 
 
         if (filePathRelative.isEmpty) continue;
         fileUpdates.add({'path': filePathRelative, 'content': fileContent});
@@ -277,7 +338,7 @@ class FileSystemService {
           if (i + 1 < parts.length) {
             String filePathRelative = parts[i].trim();
             currentFilePathRelativeForError = filePathRelative;
-            String fileContent = parts[i+1];
+            String fileContent = parts[i+1]; 
 
             if (fileContent.trimRight().endsWith('```')) {
               fileContent = fileContent.substring(0, fileContent.lastIndexOf('```'));
@@ -304,7 +365,7 @@ class FileSystemService {
     for (var update in fileUpdates) {
       String relativePath = update['path']!;
       String content = update['content']!;
-      currentFilePathRelativeForError = relativePath; // Обновляем для текущей операции
+      currentFilePathRelativeForError = relativePath; 
 
       relativePath = relativePath.replaceAll('\\', '/');
       if (relativePath.startsWith('/')) {
@@ -320,14 +381,13 @@ class FileSystemService {
         File file = File(absolutePath);
         String contentToWrite = content;
         if (content.isNotEmpty && !content.endsWith('\n')) {
-          contentToWrite += '\n';
+            contentToWrite += '\n';
         }
 
         await file.writeAsString(contentToWrite, flush: true);
         successfulUpdates++;
       } catch (e) {
         failedUpdates++;
-        // Используем currentFilePathRelativeForError здесь, так как оно будет более актуальным
         errorMessages.add("Ошибка записи файла $currentFilePathRelativeForError: $e");
       }
     }

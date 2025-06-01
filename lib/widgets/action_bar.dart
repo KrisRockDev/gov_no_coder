@@ -37,10 +37,6 @@ class ActionBar extends ConsumerWidget {
   }
 
   void _showContent(WidgetRef ref) {
-    // Эта функция теперь вызывается по Ctrl+Enter из HomeScreen
-    // Здесь можно оставить логику, если кнопка все еще нужна,
-    // но основное действие по горячей клавише - в HomeScreen.
-    // Для консистентности, вызовем тот же метод, что и горячая клавиша.
     if (ref.read(canShowContentProvider) && !ref.read(aggregatedContentProvider).isLoading) {
       ref.read(aggregatedContentProvider.notifier).aggregateContent();
     }
@@ -52,17 +48,17 @@ class ActionBar extends ConsumerWidget {
   }
 
   void _copyAll(BuildContext context, WidgetRef ref) {
-    // Эта функция теперь вызывается по Ctrl+Shift+C из HomeScreen
     final startPrompt = ref.read(startPromptProvider);
     final content = ref.read(aggregatedContentProvider).asData?.value ?? "";
-    final endPrompt = ref.read(endPromptProvider);
+    final endPromptValue = ref.read(endPromptProvider);
+    final String actualEndPrompt = endPromptValue.trim().isEmpty ? AppConstants.defaultUpdateSystemPrompt : endPromptValue;
 
     final parts = <String>[
       if (startPrompt.trim().isNotEmpty) startPrompt.trim(),
-      if (content.trim().isNotEmpty) content.trim(), // Используем content как он есть (уже trimRight в сервисе)
-      if (endPrompt.trim().isNotEmpty) endPrompt.trim(),
+      if (content.trim().isNotEmpty) content.trim(),
+      if (actualEndPrompt.trim().isNotEmpty) actualEndPrompt.trim(),
     ];
-    final fullText = parts.join("\n\n").trim(); // Финальный trim для всего текста
+    final fullText = parts.join("\n\n").trim();
 
     if (fullText.isNotEmpty) {
       FlutterClipboard.copy(fullText).then((_) {
@@ -82,9 +78,8 @@ class ActionBar extends ConsumerWidget {
   }
 
   void _clearAllFields(WidgetRef ref) {
-    // Эта функция теперь вызывается по Ctrl+X из HomeScreen
     ref.read(startPromptProvider.notifier).state = "";
-    ref.read(endPromptProvider.notifier).state = AppConstants.defaultUpdateSystemPrompt;
+    ref.read(endPromptProvider.notifier).state = ""; // Очищаем, т.к. defaultUpdateSystemPrompt больше не дефолт для поля
     ref.read(filesToUpdateInputProvider.notifier).state = "";
     ref.read(aggregatedContentProvider.notifier).clearContent();
   }
@@ -94,7 +89,7 @@ class ActionBar extends ConsumerWidget {
     final themeMode = ref.watch(themeModeProvider);
     final isLoadingContent = ref.watch(aggregatedContentProvider).isLoading;
     final isLoadingTree = ref.watch(fileTreeDataProvider).isLoading;
-    final isLoadingUpdate = ref.watch(updateFilesStatusProvider).isLoading; // Для кнопки обновления
+    final isLoadingUpdate = ref.watch(updateFilesStatusProvider).isLoading;
 
     final canSelectAll = ref.watch(canSelectAllProvider);
     final canDeselectAll = ref.watch(canDeselectAllProvider);
@@ -124,6 +119,7 @@ class ActionBar extends ConsumerWidget {
               style: Theme.of(context).textTheme.titleSmall,
               overflow: TextOverflow.ellipsis,
               maxLines: 1,
+              softWrap: false, // Чтобы не переносился на новую строку
             ),
           ),
           const SizedBox(width: 8),
@@ -164,7 +160,7 @@ class ActionBar extends ConsumerWidget {
             ),
           ),
           Tooltip(
-            message: "Очистить все поля [Ctrl+X]",
+            message: "Очистить все поля", // Убрали [Ctrl+Shift+X] из подсказки
             child: IconButton(
               icon: const Icon(Icons.clear_all),
               onPressed: canClearAll ? () => _clearAllFields(ref) : null,

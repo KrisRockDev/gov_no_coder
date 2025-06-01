@@ -141,9 +141,8 @@ class _ContentPanelState extends ConsumerState<ContentPanel> {
       ],
     );
 
-    // Если поле должно растягиваться, оборачиваем его в Expanded.
-    // Иначе, оно будет занимать минимально необходимую высоту в Column.
     final fieldContainer = expands ? Expanded(child: textFieldWidget) : textFieldWidget;
+
 
     return Column(
       crossAxisAlignment: CrossAxisAlignment.start,
@@ -154,7 +153,14 @@ class _ContentPanelState extends ConsumerState<ContentPanel> {
             padding: const EdgeInsets.only(bottom: 4.0, left: 4.0),
             child: Text(label, style: theme.textTheme.labelMedium?.copyWith(color: theme.colorScheme.primary)),
           ),
-        fieldContainer,
+        // Если expands false (для полей промпта), используем SizedBox для контроля высоты
+        if (!expands) 
+          SizedBox(
+            height: (minLines == 1 && maxLines == 1) ? 50 : 80, // Примерная высота для 1-2 строк или 2-3 строк
+            child: fieldContainer,
+          ) 
+        else 
+          fieldContainer,
       ],
     );
   }
@@ -192,141 +198,139 @@ class _ContentPanelState extends ConsumerState<ContentPanel> {
     final theme = Theme.of(context);
     final canUpdateFiles = ref.watch(canUpdateProjectFilesProvider);
 
-    const promptMinLines = 4; // Увеличено (было 3 * 1.5 ~= 4.5)
-    const promptMaxLines = 7; // Увеличено (было 5 * 1.5 ~= 7.5)
+    // Уменьшенные min/max lines для начального промпта
+    const startPromptMinLines = 1;
+    const startPromptMaxLines = 1; // Делаем однострочным или очень коротким
+    
+    // Для завершающего промпта, который может быть системным и длинным
+    const endPromptMinLines = 3;
+    const endPromptMaxLines = 5;
+
 
     return Padding(
       padding: const EdgeInsets.all(8.0),
-      child: Column(
+      child: Row( 
+        crossAxisAlignment: CrossAxisAlignment.start,
         children: [
           Expanded(
-            child: Row(
-              crossAxisAlignment: CrossAxisAlignment.start,
+            flex: 1, // Левая колонка занимает 1 часть
+            child: Column(
               children: [
-                // Левая колонка: Агрегированный контент и промпты
-                Expanded(
-                  child: Column(
-                    children: [
-                      _buildTextFieldWithClear(
-                        context: context,
-                        label: "Начальный промпт:",
-                        hint: "Добавьте текст перед содержимым файлов...",
-                        controller: _startPromptController,
-                        provider: startPromptProvider,
-                        ref: ref,
-                        minLines: promptMinLines,
-                        maxLines: promptMaxLines,
-                      ),
-                      const SizedBox(height: 8),
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: [
-                            Padding(
-                              padding: const EdgeInsets.only(bottom: 4.0, left: 4.0),
-                              child: Text("Агрегированный контент:", style: theme.textTheme.labelMedium?.copyWith(color: theme.colorScheme.primary)),
-                            ),
-                            Expanded(
-                              child: aggregatedContentAsync.when(
-                                data: (content) {
-                                  final contentController = TextEditingController(text: content);
-                                  return TextField(
-                                    key: ValueKey(content),
-                                    controller: contentController,
-                                    readOnly: true,
-                                    minLines: null,
-                                    maxLines: null,
-                                    expands: true,
-                                    textAlignVertical: TextAlignVertical.top,
-                                    decoration: InputDecoration(
-                                      hintText: "Содержимое выбранных файлов...",
-                                      hintStyle: AppConstants.hintStyle.copyWith(color: theme.hintColor),
-                                      border: OutlineInputBorder(
-                                        borderRadius: BorderRadius.circular(8),
-                                        borderSide: BorderSide(color: theme.dividerColor),
-                                      ),
-                                      enabledBorder: OutlineInputBorder(
-                                        borderRadius: BorderRadius.circular(8),
-                                        borderSide: BorderSide(color: theme.dividerColor.withOpacity(0.7)),
-                                      ),
-                                      fillColor: theme.colorScheme.surfaceVariant.withOpacity(0.2),
-                                      filled: true,
-                                      contentPadding: const EdgeInsets.all(10),
-                                    ),
-                                    style: const TextStyle(fontSize: 13, fontFamily: 'monospace'),
-                                  );
-                                },
-                                loading: () => const Center(child: CircularProgressIndicator()),
-                                error: (error, _) => Center(
-                                  child: Text("Ошибка: $error", style: TextStyle(color: theme.colorScheme.error)),
-                                ),
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                       const SizedBox(height: 8),
-                      _buildTextFieldWithClear(
-                        context: context,
-                        label: "Завершающий промпт (системный):",
-                        hint: "Инструкции для ИИ по формату обновления файлов...",
-                        controller: _endPromptController,
-                        provider: endPromptProvider,
-                        ref: ref,
-                        minLines: promptMinLines,
-                        maxLines: promptMaxLines,
-                      ),
-                    ],
-                  ),
+                _buildTextFieldWithClear(
+                  context: context,
+                  label: "Начальный промпт:",
+                  hint: "Добавьте текст перед содержимым файлов...",
+                  controller: _startPromptController,
+                  provider: startPromptProvider,
+                  ref: ref,
+                  minLines: startPromptMinLines, 
+                  maxLines: startPromptMaxLines,
                 ),
-                const SizedBox(width: 8), // Разделитель между колонками
-                // Правая колонка: Поле для обновления файлов
-                Expanded(
+                const SizedBox(height: 8),
+                Expanded( 
                   child: Column(
                     crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
                       Padding(
                         padding: const EdgeInsets.only(bottom: 4.0, left: 4.0),
-                        child: Text("Данные для обновления файлов:", style: theme.textTheme.labelMedium?.copyWith(color: theme.colorScheme.primary)),
+                        child: Text("Агрегированный контент:", style: theme.textTheme.labelMedium?.copyWith(color: theme.colorScheme.primary)),
                       ),
                       Expanded(
-                        child: _buildTextFieldWithClear(
-                          context: context,
-                          hint: "Вставьте сюда ответ для обновления файлов...\nФормат:\nпуть/к/файлу1\n```\nкод...\n```\nпуть/к/файлу2\n```\nкод...\n```",
-                          controller: _filesToUpdateController,
-                          provider: filesToUpdateInputProvider,
-                          ref: ref,
-                          minLines: 10, // Это поле будет растягиваться
-                          maxLines: null,
-                          expands: true,   // Растягиваем это поле
-                          fontFamily: 'monospace',
-                        ),
-                      ),
-                      const SizedBox(height: 8),
-                      SizedBox(
-                        width: double.infinity,
-                        child: ElevatedButton.icon(
-                          icon: updateStatusAsync.isLoading
-                              ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
-                              : const Icon(Icons.system_update_alt),
-                          label: Text(updateStatusAsync.isLoading ? "Обновление..." : "Обновить файлы проекта"),
-                          onPressed: canUpdateFiles && !updateStatusAsync.isLoading
-                              ? () => _handleUpdateFiles(context, ref)
-                              : null,
-                          style: ElevatedButton.styleFrom(
-                              padding: const EdgeInsets.symmetric(vertical: 12),
-                              textStyle: const TextStyle(fontSize: 13)
+                        child: aggregatedContentAsync.when(
+                          data: (content) {
+                            final contentController = TextEditingController(text: content);
+                            return TextField(
+                              key: ValueKey(content),
+                              controller: contentController,
+                              readOnly: true,
+                              minLines: null,
+                              maxLines: null,
+                              expands: true,
+                              textAlignVertical: TextAlignVertical.top,
+                              decoration: InputDecoration(
+                                hintText: "Содержимое выбранных файлов...",
+                                hintStyle: AppConstants.hintStyle.copyWith(color: theme.hintColor),
+                                border: OutlineInputBorder(
+                                  borderRadius: BorderRadius.circular(8),
+                                  borderSide: BorderSide(color: theme.dividerColor),
+                                ),
+                                enabledBorder: OutlineInputBorder(
+                                  borderRadius: BorderRadius.circular(8),
+                                  borderSide: BorderSide(color: theme.dividerColor.withOpacity(0.7)),
+                                ),
+                                fillColor: theme.colorScheme.surfaceVariant.withOpacity(0.2),
+                                filled: true,
+                                contentPadding: const EdgeInsets.all(10),
+                              ),
+                              style: const TextStyle(fontSize: 13, fontFamily: 'monospace'),
+                            );
+                          },
+                          loading: () => const Center(child: CircularProgressIndicator()),
+                          error: (error, _) => Center(
+                            child: Text("Ошибка: $error", style: TextStyle(color: theme.colorScheme.error)),
                           ),
                         ),
                       ),
                     ],
                   ),
                 ),
+                const SizedBox(height: 8),
+                _buildTextFieldWithClear(
+                  context: context,
+                  label: "Завершающий промпт:", // Убрали "(системный)"
+                  hint: "Добавьте текст после содержимого файлов...",
+                  controller: _endPromptController,
+                  provider: endPromptProvider,
+                  ref: ref,
+                  minLines: endPromptMinLines,
+                  maxLines: endPromptMaxLines,
+                ),
               ],
             ),
           ),
-          // Убираем промпты снизу, так как они теперь в левой колонке
-          // const SizedBox(height: 8),
+          const SizedBox(width: 8),
+          Expanded(
+            flex: 1, // Правая колонка также занимает 1 часть (равное разделение правой панели)
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                Padding(
+                  padding: const EdgeInsets.only(bottom: 4.0, left: 4.0),
+                  child: Text("Данные для обновления файлов:", style: theme.textTheme.labelMedium?.copyWith(color: theme.colorScheme.primary)),
+                ),
+                Expanded(
+                  child: _buildTextFieldWithClear(
+                    context: context,
+                    hint: "Вставьте сюда ответ для обновления файлов...\nФормат:\nпуть/к/файлу1\n```\nкод...\n```\nпуть/к/файлу2\n```\nкод...\n```",
+                    controller: _filesToUpdateController,
+                    provider: filesToUpdateInputProvider,
+                    ref: ref,
+                    minLines: 10, 
+                    maxLines: null,
+                    expands: true,
+                    fontFamily: 'monospace',
+                  ),
+                ),
+                const SizedBox(height: 8),
+                SizedBox(
+                  width: double.infinity,
+                  child: ElevatedButton.icon(
+                    icon: updateStatusAsync.isLoading
+                        ? const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white))
+                        : const Icon(Icons.system_update_alt),
+                    label: Text(updateStatusAsync.isLoading ? "Обновление..." : "Обновить файлы проекта"),
+                    onPressed: canUpdateFiles && !updateStatusAsync.isLoading
+                        ? () => _handleUpdateFiles(context, ref)
+                        : null,
+                    style: ElevatedButton.styleFrom(
+                        padding: const EdgeInsets.symmetric(vertical: 12),
+                        textStyle: const TextStyle(fontSize: 13)
+                    ),
+                  ),
+                ),
+              ],
+            ),
+          ),
         ],
       ),
     );
